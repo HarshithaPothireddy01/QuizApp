@@ -34,11 +34,16 @@ EMAIL = os.getenv('EMAIL')
 APP_PASSWORD = os.getenv('APP_PASSWORD')
 
 # ==================== GROQ CLIENT ====================
+# ==================== GROQ CLIENT ====================
 try:
-    groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+    groq_client = Client(
+        api_key=os.getenv("GROQ_API_KEY")
+    )
+    print("✅ Groq client initialized successfully")
 except Exception as e:
-    print(f"Warning: Groq client initialization failed: {e}")
+    print(f"❌ Groq client initialization failed: {e}")
     groq_client = None
+
 
 # ==================== DYNAMODB ====================
 try:
