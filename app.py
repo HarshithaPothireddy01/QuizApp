@@ -11,7 +11,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 import boto3
 from botocore.exceptions import ClientError
-from groq import Groq
+from groq import Client
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
