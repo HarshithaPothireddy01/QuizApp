@@ -637,7 +637,7 @@ Make the questions diverse and challenging. Do not include any text before or af
                 return jsonify({"error": "AI service not configured"}), 500
             
             response = groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="llama3-70b-8192",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7
             )
