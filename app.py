@@ -2,7 +2,6 @@ import os
 import json
 import uuid
 from datetime import datetime
-from decimal import Decimal
 
 from flask import Flask, request, jsonify, session
 from flask_cors import CORS
@@ -12,7 +11,6 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import boto3
 import smtplib
 from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 
 from openai import OpenAI
 
@@ -30,6 +28,14 @@ CORS(
     allow_headers=["Content-Type", "Authorization"],
     methods=["GET", "POST", "OPTIONS"]
 )
+
+# ==================== ROOT (FIXES 404) ====================
+@app.route("/", methods=["GET"])
+def home():
+    return jsonify({
+        "status": "Backend is running",
+        "service": "Quiz App API"
+    })
 
 # ==================== EMAIL CONFIG ====================
 EMAIL = os.getenv("EMAIL")
@@ -63,9 +69,6 @@ except Exception as e:
 quiz_sessions = {}
 
 # ==================== HELPERS ====================
-def validate_email(email):
-    return "@" in email and "." in email
-
 def is_logged_in():
     return "user_id" in session
 
@@ -83,7 +86,7 @@ def send_email(to_email, subject, body):
 
         return True
     except Exception as e:
-        print("Email error:", e)
+        print("❌ Email error:", e)
         return False
 
 # ==================== AUTH ====================
@@ -130,8 +133,12 @@ def start_quiz():
     if not is_logged_in():
         return jsonify({"error": "Login required"}), 401
 
-    topic = request.json["topic"]
-    count = int(request.json.get("num_questions", 5))
+    if not openai_client:
+        return jsonify({"error": "AI service unavailable"}), 503
+
+    data = request.json
+    topic = data["topic"]
+    count = int(data.get("num_questions", 5))
 
     prompt = f"""
 Generate exactly {count} MCQs on {topic}.
@@ -169,9 +176,12 @@ Return ONLY JSON:
 @app.route("/api/answer/<quiz_id>", methods=["POST"])
 def answer(quiz_id):
     quiz = quiz_sessions.get(quiz_id)
-    quiz["answers"].append(request.json["answer"])
+    if not quiz:
+        return jsonify({"error": "Quiz not found"}), 404
 
+    quiz["answers"].append(request.json["answer"])
     idx = len(quiz["answers"])
+
     if idx >= len(quiz["questions"]):
         return jsonify({"completed": True})
 
@@ -180,7 +190,10 @@ def answer(quiz_id):
 
 @app.route("/api/submit/<quiz_id>", methods=["POST"])
 def submit(quiz_id):
-    quiz = quiz_sessions.pop(quiz_id)
+    quiz = quiz_sessions.pop(quiz_id, None)
+    if not quiz:
+        return jsonify({"error": "Quiz not found"}), 404
+
     score = sum(
         1 for i, q in enumerate(quiz["questions"])
         if quiz["answers"][i] == q["answer"]
@@ -198,7 +211,7 @@ def submit(quiz_id):
     })
 
 # ==================== HEALTH ====================
-@app.route("/health")
+@app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"})
 
