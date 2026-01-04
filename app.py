@@ -2,16 +2,13 @@ import os
 import json
 import uuid
 from datetime import datetime
-
 from flask import Flask, request, jsonify, session
 from flask_cors import CORS
 from dotenv import load_dotenv
 from werkzeug.security import generate_password_hash, check_password_hash
-
 import boto3
 import smtplib
 from email.mime.text import MIMEText
-
 from openai import OpenAI
 
 # ==================== LOAD ENV ====================
@@ -21,30 +18,48 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "dev-secret")
 
+# ✅ Session secure config
+app.config.update(
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_SAMESITE="None"
+)
+
+# ==================== CORS ====================
+FRONTEND_URL = os.getenv("FRONTEND_URL", "*")  # replace with your frontend live URL once deployed
 CORS(
     app,
     supports_credentials=True,
-    origins=["*"],
+    origins=[FRONTEND_URL, "http://localhost:3000", "http://127.0.0.1:3000"],
     allow_headers=["Content-Type", "Authorization"],
     methods=["GET", "POST", "OPTIONS"]
 )
 
-# ==================== ROOT (FIXES 404) ====================
+# ==================== ROOT ====================
 @app.route("/", methods=["GET"])
 def home():
-    return jsonify({
-        "status": "Backend is running",
-        "service": "Quiz App API"
-    })
+    return jsonify({"status": "Backend is running", "service": "Quiz App API"})
 
-# ==================== EMAIL CONFIG ====================
+# ==================== EMAIL ====================
 EMAIL = os.getenv("EMAIL")
 APP_PASSWORD = os.getenv("APP_PASSWORD")
 
-# ==================== OPENAI CLIENT ====================
+def send_email(to_email, subject, body):
+    try:
+        msg = MIMEText(body)
+        msg["From"] = EMAIL
+        msg["To"] = to_email
+        msg["Subject"] = subject
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(EMAIL, APP_PASSWORD)
+            server.send_message(msg)
+        return True
+    except Exception as e:
+        print("❌ Email error:", e)
+        return False
+
+# ==================== OPENAI ====================
 try:
     openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    print("✅ OpenAI client initialized")
 except Exception as e:
     print("❌ OpenAI init failed:", e)
     openai_client = None
@@ -59,7 +74,6 @@ try:
     )
     users_table = dynamodb.Table("QuizUsers")
     quiz_table = dynamodb.Table(os.getenv("DYNAMODB_TABLE_NAME", "quizz"))
-    print("✅ DynamoDB connected")
 except Exception as e:
     print("❌ DynamoDB error:", e)
     users_table = None
@@ -68,33 +82,14 @@ except Exception as e:
 # ==================== IN-MEMORY QUIZ ====================
 quiz_sessions = {}
 
-# ==================== HELPERS ====================
 def is_logged_in():
     return "user_id" in session
-
-# ==================== EMAIL SENDER ====================
-def send_email(to_email, subject, body):
-    try:
-        msg = MIMEText(body)
-        msg["From"] = EMAIL
-        msg["To"] = to_email
-        msg["Subject"] = subject
-
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(EMAIL, APP_PASSWORD)
-            server.send_message(msg)
-
-        return True
-    except Exception as e:
-        print("❌ Email error:", e)
-        return False
 
 # ==================== AUTH ====================
 @app.route("/api/signup", methods=["POST"])
 def signup():
     data = request.json
     email = data["email"].lower()
-
     if users_table.get_item(Key={"email": email}).get("Item"):
         return jsonify({"error": "Email exists"}), 409
 
@@ -105,21 +100,18 @@ def signup():
         "password": generate_password_hash(data["password"]),
         "created_at": datetime.utcnow().isoformat()
     })
-
     return jsonify({"message": "Signup success"})
 
 @app.route("/api/login", methods=["POST"])
 def login():
     data = request.json
     user = users_table.get_item(Key={"email": data["email"].lower()}).get("Item")
-
     if not user or not check_password_hash(user["password"], data["password"]):
         return jsonify({"error": "Invalid credentials"}), 401
 
     session["user_id"] = user["user_id"]
     session["email"] = user["email"]
     session["name"] = user["name"]
-
     return jsonify({"message": "Login success"})
 
 @app.route("/api/logout", methods=["POST"])
@@ -132,7 +124,6 @@ def logout():
 def start_quiz():
     if not is_logged_in():
         return jsonify({"error": "Login required"}), 401
-
     if not openai_client:
         return jsonify({"error": "AI service unavailable"}), 503
 
@@ -151,7 +142,6 @@ Return ONLY JSON:
   }}
 ]
 """
-
     response = openai_client.chat.completions.create(
         model="openai/gpt-oss-120b",
         messages=[{"role": "user", "content": prompt}],
@@ -159,13 +149,8 @@ Return ONLY JSON:
     )
 
     questions = json.loads(response.choices[0].message.content)
-
     quiz_id = str(uuid.uuid4())
-    quiz_sessions[quiz_id] = {
-        "questions": questions,
-        "answers": [],
-        "user": session["email"]
-    }
+    quiz_sessions[quiz_id] = {"questions": questions, "answers": [], "user": session["email"]}
 
     return jsonify({
         "quiz_id": quiz_id,
@@ -181,7 +166,6 @@ def answer(quiz_id):
 
     quiz["answers"].append(request.json["answer"])
     idx = len(quiz["answers"])
-
     if idx >= len(quiz["questions"]):
         return jsonify({"completed": True})
 
@@ -194,21 +178,9 @@ def submit(quiz_id):
     if not quiz:
         return jsonify({"error": "Quiz not found"}), 404
 
-    score = sum(
-        1 for i, q in enumerate(quiz["questions"])
-        if quiz["answers"][i] == q["answer"]
-    )
-
-    send_email(
-        quiz["user"],
-        "Quiz Result",
-        f"Score: {score}/{len(quiz['questions'])}"
-    )
-
-    return jsonify({
-        "score": score,
-        "total": len(quiz["questions"])
-    })
+    score = sum(1 for i, q in enumerate(quiz["questions"]) if quiz["answers"][i] == q["answer"])
+    send_email(quiz["user"], "Quiz Result", f"Score: {score}/{len(quiz['questions'])}")
+    return jsonify({"score": score, "total": len(quiz["questions"])})
 
 # ==================== HEALTH ====================
 @app.route("/health", methods=["GET"])
